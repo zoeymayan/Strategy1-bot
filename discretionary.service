@@ -1,0 +1,16 @@
+[Unit]
+Description=Discretionary AVWAP Lock Service
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/discretionary
+EnvironmentFile=/home/ubuntu/discretionary/.env
+ExecStart=/home/ubuntu/discretionary/venv/bin/python main.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

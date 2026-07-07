@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh api *)",
+      "Bash(ssh -o StrictHostKeyChecking=no myaws \"echo connected && whoami && ls ~\")",
+      "Bash(ssh myaws *)",
+      "Bash(scp -r \"/Users/shyam/Claude Code/Discretionary avwap set up/.\" myaws:~/discretionary/)",
+      "Bash(scp \"/Users/shyam/Claude Code/Discretionary avwap set up/dhan_client.py\" myaws:~/discretionary/dhan_client.py)",
+      "Bash(scp \"/Users/shyam/Claude Code/Discretionary avwap set up/main.py\" myaws:~/discretionary/main.py)",
+      "Bash(curl -s -X POST http://3.108.170.207/webhook -H 'Content-Type: application/json' -d '{\"action\":\"control\",\"trend\":\"1\",\"active\":\"1\",\"secret\":\"4fd1cdab09611783552dcc23f916f877\"}')",
+      "WebFetch(domain:raw.githubusercontent.com)"
+    ]
+  }
+}

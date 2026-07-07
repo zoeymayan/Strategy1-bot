@@ -1,0 +1,32 @@
+//@version=5
+indicator("Discretionary AVWAP Entries", overlay=true)
+
+// Bind to your AVWAP study output in Settings → AVWAP Source
+i_avwap = input.source(close, "AVWAP Source")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Direction is baked into each alert message — the server holds no trend state.
+//
+//   Trend selection = which ONE of the two alerts is enabled in the alert panel.
+//   Pause           = both alerts toggled off.
+//   Exits           = two horizontal ray DRAWINGS (PT + SL) with native crossing
+//                     alerts — drag to move, never delete. Not in this script.
+//
+// TradingView alerts freeze indicator settings at creation, so create these two
+// alerts ONCE (frequency: "Once Per Bar Close") and never recreate them —
+// toggling them on/off in the alert panel is always safe.
+// Replace WEBHOOK_SECRET with the value from .env before creating the alerts.
+// ─────────────────────────────────────────────────────────────────────────────
+
+bull_entry = ta.crossover(close, i_avwap)
+bear_entry = ta.crossunder(close, i_avwap)
+
+// Optional wick-rejection triggers — uncomment to also enter on touch-and-reject:
+// bull_entry := bull_entry or (low  < i_avwap and close > i_avwap)
+// bear_entry := bear_entry or (high > i_avwap and close < i_avwap)
+
+alertcondition(bull_entry, title="Entry Bull (CE)",
+     message='{"signal":"entry","dir":"bull","price":{{close}},"secret":"WEBHOOK_SECRET"}')
+
+alertcondition(bear_entry, title="Entry Bear (PE)",
+     message='{"signal":"entry","dir":"bear","price":{{close}},"secret":"WEBHOOK_SECRET"}')

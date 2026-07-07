@@ -1,0 +1,23 @@
+//@version=5
+indicator("AVWAP", overlay=true)
+
+// Click on chart to set anchor bar; drag to reanchor.
+anchor_time = input.time(0, "Anchor", confirm=true)
+
+var float cum_tpv = 0.0
+var float cum_vol = 0.0
+
+is_anchor_bar = time >= anchor_time and time[1] < anchor_time
+
+if is_anchor_bar
+    cum_tpv := 0.0
+    cum_vol  := 0.0
+
+if time >= anchor_time
+    tp       = (high + low + close) / 3
+    cum_tpv += tp * volume
+    cum_vol  += volume
+
+avwap = cum_vol > 0 ? cum_tpv / cum_vol : na
+
+plot(avwap, "AVWAP", color=color.yellow, linewidth=2)
