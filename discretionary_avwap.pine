@@ -18,12 +18,9 @@ i_avwap = input.source(close, "AVWAP Source")
 // Replace WEBHOOK_SECRET with the value from .env before creating the alerts.
 // ─────────────────────────────────────────────────────────────────────────────
 
-bull_entry = ta.crossover(close, i_avwap)
-bear_entry = ta.crossunder(close, i_avwap)
-
-// Optional wick-rejection triggers — uncomment to also enter on touch-and-reject:
-// bull_entry := bull_entry or (low  < i_avwap and close > i_avwap)
-// bear_entry := bear_entry or (high > i_avwap and close < i_avwap)
+// Entry = close cross OR wick rejection (touch-and-reject), at bar close
+bull_entry = ta.crossover(close, i_avwap)  or (low  < i_avwap and close > i_avwap)
+bear_entry = ta.crossunder(close, i_avwap) or (high > i_avwap and close < i_avwap)
 
 alertcondition(bull_entry, title="Entry Bull (CE)",
      message='{"signal":"entry","dir":"bull","price":{{close}},"secret":"WEBHOOK_SECRET"}')
