@@ -57,9 +57,9 @@ even mid-position.
 crontab -e
 ```
 
-Add (08:45 IST = 03:15 UTC):
+Add (EC2 system clock is IST, so this is 08:45 IST):
 ```
-15 3 * * 1-5 /home/ubuntu/discretionary/venv/bin/python /home/ubuntu/discretionary/refresh_token.py >> /home/ubuntu/discretionary/refresh.log 2>&1
+45 8 * * 1-5 /home/ubuntu/discretionary/venv/bin/python /home/ubuntu/discretionary/refresh_token.py >> /home/ubuntu/discretionary/refresh.log 2>&1
 ```
 
 ## 7. Open firewall port

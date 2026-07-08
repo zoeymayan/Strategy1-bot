@@ -2,10 +2,14 @@
 Daily Dhan token refresh — run via cron at 08:45 IST before market open.
 Adapted from sohum's refresh_token.py. Uses TOTP to generate a fresh
 access token and writes it to .env so the service picks it up automatically
-(via importlib.reload in dhan_client.py) without a restart.
+(dhan_client reloads credentials when .env mtime changes) without a restart.
 
-Cron entry (EC2, IST = UTC+5:30 → 08:45 IST = 03:15 UTC):
-    15 3 * * 1-5 /home/ubuntu/discretionary/venv/bin/python /home/ubuntu/discretionary/refresh_token.py >> /home/ubuntu/discretionary/refresh.log 2>&1
+Dhan's auth endpoint is https://auth.dhan.co/app/generateAccessToken and it
+takes dhanClientId/pin/totp as URL QUERY PARAMS, not a JSON body — JSON gets
+a generic 400/404. (See https://dhanhq.co/docs/v2/authentication/)
+
+Cron entry (EC2 system clock is IST):
+    45 8 * * 1-5 /home/ubuntu/discretionary/venv/bin/python /home/ubuntu/discretionary/refresh_token.py >> /home/ubuntu/discretionary/refresh.log 2>&1
 """
 import os
 import re
@@ -17,7 +21,7 @@ import requests
 from dotenv import dotenv_values
 
 ENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
-DHAN_AUTH_URL = "https://api.dhan.co/v2/token"
+DHAN_AUTH_URL = "https://auth.dhan.co/app/generateAccessToken"
 
 MAX_RETRIES = 3
 RETRY_DELAY = 30  # seconds
@@ -80,9 +84,10 @@ def refresh() -> bool:
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             totp = pyotp.TOTP(totp_secret).now()
+            # Query params, NOT a JSON body — Dhan rejects JSON here
             resp = requests.post(
                 DHAN_AUTH_URL,
-                json={"clientId": client_id, "loginType": "API", "pin": pin, "totp": totp},
+                params={"dhanClientId": client_id, "pin": pin, "totp": totp},
                 timeout=15,
             )
             resp.raise_for_status()
