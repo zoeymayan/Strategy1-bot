@@ -215,7 +215,13 @@ def square_off(security_id: str, symbol: str, qty: int) -> str:
 # ---------------------------------------------------------------------------
 
 def get_nifty_option_positions() -> list[dict]:
-    """Return merged list of today's Nifty option positions (deduped by security_id).
+    """Return merged list of today's MIS Nifty option positions (deduped by security_id).
+
+    Scoped to productType INTRADAY (MIS) only — the short-straddle strategy
+    trades NRML ("MARGIN") in the same account and must be invisible to this
+    service: its legs must not trip the entry lock, the rogue policing, the
+    short alerts, or the P&L reports. Dhan never nets MIS and NRML rows
+    against each other, so this partition is safe even on identical strikes.
 
     Includes flat rows (net_qty == 0) — their realized_profit is how daily P&L
     is computed, so callers must filter on net_qty themselves.
@@ -225,6 +231,8 @@ def get_nifty_option_positions() -> list[dict]:
 
     merged: dict[str, dict] = {}
     for p in positions:
+        if str(p.get("productType") or p.get("product_type") or "") != "INTRADAY":
+            continue
         sym = str(p.get("tradingSymbol") or p.get("symbol") or "")
         if not ("NIFTY" in sym and ("CE" in sym or "PE" in sym)):
             continue
@@ -298,10 +306,15 @@ def has_pending_disc_buy() -> bool:
 
 
 def has_pending_sell(security_id: str) -> bool:
-    """True if any sell order for this security is still working."""
+    """True if any MIS sell order for this security is still working.
+
+    NRML orders excluded — a straddle order on the same strike must not
+    block a discretionary exit.
+    """
     for o in get_order_book():
         sec_id, side, status, _ = _order_fields(o)
-        if sec_id == security_id and side == "SELL" and status in PENDING_STATUSES:
+        if (sec_id == security_id and side == "SELL" and status in PENDING_STATUSES
+                and str(o.get("productType") or o.get("product_type") or "") == "INTRADAY"):
             return True
     return False
 
