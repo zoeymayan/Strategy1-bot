@@ -132,6 +132,48 @@ curl -X POST http://<EC2_IP>:5001/webhook \
 
 Check Telegram for: order placed → exit placed → position closed with P&L.
 
+## 10. 9:15 straddle automation (`straddle_915.py`)
+
+Fully automated: SELL 10-lot ATM weekly straddle at 09:15:05, BUY back at
+10:15:05. MIS market orders tagged `STR915`. Stateless — the order book is
+the only record; both modes are idempotent and safe to re-run.
+
+Add to the same crontab as the token refresh (EC2 clock is IST):
+
+```
+15 9  * * 1-5 /home/ubuntu/discretionary/venv/bin/python /home/ubuntu/discretionary/straddle_915.py --enter >> /home/ubuntu/discretionary/straddle.log 2>&1
+15 10 * * 1-5 /home/ubuntu/discretionary/venv/bin/python /home/ubuntu/discretionary/straddle_915.py --exit  >> /home/ubuntu/discretionary/straddle.log 2>&1
+25 10 * * 1-5 /home/ubuntu/discretionary/venv/bin/python /home/ubuntu/discretionary/straddle_915.py --exit  >> /home/ubuntu/discretionary/straddle.log 2>&1
+```
+
+The 10:25 line is a safety re-run: a silent no-op when already flat, a
+second chance if the 10:15 run crashed. Failure ladder if the exit can't
+flatten: Telegram alert at 10:15 → 10:25 cron retry → Dhan's MIS
+square-off (~15:15) as the final backstop.
+
+Notes:
+- Set `STRADDLE_LOTS` in `.env` (default 10). Cron runs read it fresh —
+  no restart needed.
+- The lock service ignores `STR915` legs entirely (un-netted from its
+  position view) and its P&L receipts exclude the straddle's P&L. The
+  straddle sends its own entry/exit receipts.
+- **Do not take discretionary AVWAP trades before ~10:30** — a DISC trade
+  on the straddle's strike during 09:15–10:16 would collide in Dhan's MIS
+  netting (by agreement, not enforced in code).
+- Entry skips itself (with a Telegram note) if the script starts after
+  09:20 IST — no late chasing.
+
+### Smoke test (market hours, set STRADDLE_LOTS=1 first)
+
+```bash
+venv/bin/python straddle_915.py --enter --force   # sells 1-lot straddle now
+venv/bin/python straddle_915.py --exit  --force   # buys it back now
+venv/bin/python straddle_915.py --exit  --force   # again → silent no-op, never longs
+```
+
+Check Telegram for: 🟢 straddle sold → 🔴 straddle closed with P&L. Then
+restore `STRADDLE_LOTS=10`.
+
 ## Changing lot size
 
 ```bash

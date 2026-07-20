@@ -139,6 +139,41 @@ def get_nearest_expiry() -> str:
     return expiries[0]
 
 
+def get_atm_straddle(index_price: float) -> dict:
+    """Return both ATM legs for the nearest weekly expiry in one chain call.
+
+    {"strike", "expiry", "ce": {symbol, security_id}, "pe": {symbol, security_id}}
+    """
+    strike = round(index_price / NIFTY_STRIKE_INTERVAL) * NIFTY_STRIKE_INTERVAL
+    expiry = get_nearest_expiry()
+
+    r = requests.post(DHAN_BASE + "/optionchain", headers=_headers(), json={
+        "UnderlyingScrip": int(NIFTY_UNDERLYING_SCRIP),
+        "UnderlyingSeg":   NIFTY_UNDERLYING_SEG,
+        "Expiry":          expiry,
+    }, timeout=10)
+    r.raise_for_status()
+    oc = r.json().get("data", {}).get("oc", {})
+
+    ce_id = pe_id = ""
+    for strike_key, legs in oc.items():
+        if int(float(strike_key)) == strike:
+            ce_id = str(legs.get("ce", {}).get("security_id") or "")
+            pe_id = str(legs.get("pe", {}).get("security_id") or "")
+            break
+
+    if not ce_id or not pe_id:
+        raise RuntimeError(f"straddle legs not found for NIFTY {strike} exp {expiry}")
+
+    base = f"NIFTY{expiry.replace('-', '')}{strike}"
+    return {
+        "strike": strike,
+        "expiry": expiry,
+        "ce": {"symbol": base + "CE", "security_id": ce_id},
+        "pe": {"symbol": base + "PE", "security_id": pe_id},
+    }
+
+
 def get_atm_option(index_price: float, option_type: str) -> dict:
     """Return {symbol, security_id, strike, expiry} for the ATM Nifty option."""
     strike = round(index_price / NIFTY_STRIKE_INTERVAL) * NIFTY_STRIKE_INTERVAL
@@ -175,7 +210,8 @@ def get_atm_option(index_price: float, option_type: str) -> dict:
 # Orders
 # ---------------------------------------------------------------------------
 
-def _place_order(side: str, security_id: str, qty: int) -> str:
+def _place_order(side: str, security_id: str, qty: int,
+                 correlation: str | None = None) -> str:
     """Place a market intraday order. side = 'BUY' or 'SELL'. Returns order_id."""
     _, cid = _credentials()
     body = {
@@ -188,7 +224,7 @@ def _place_order(side: str, security_id: str, qty: int) -> str:
         "securityId":      security_id,
         "quantity":        qty,
         "price":           0,
-        "correlationId":   "DISC",
+        "correlationId":   correlation or CORRELATION_TAG,
     }
     resp = _post("/orders", body)
     order_id = str(resp.get("orderId") or resp.get("order_id") or "")
@@ -197,12 +233,21 @@ def _place_order(side: str, security_id: str, qty: int) -> str:
     return order_id
 
 
-def place_buy_order(security_id: str, qty: int) -> str:
-    return _place_order("BUY", security_id, qty)
+def place_buy_order(security_id: str, qty: int, correlation: str | None = None) -> str:
+    return _place_order("BUY", security_id, qty, correlation)
 
 
-def place_sell_order(security_id: str, qty: int) -> str:
-    return _place_order("SELL", security_id, qty)
+def place_sell_order(security_id: str, qty: int, correlation: str | None = None) -> str:
+    return _place_order("SELL", security_id, qty, correlation)
+
+
+def get_order_status(order_id: str) -> str:
+    """Current status of a single order (e.g. TRADED, PENDING, REJECTED)."""
+    data = _get(f"/orders/{order_id}")
+    o = data.get("data", data) if isinstance(data, dict) else data
+    if isinstance(o, list):
+        o = o[0] if o else {}
+    return str(o.get("orderStatus") or o.get("status") or "")
 
 
 def square_off(security_id: str, symbol: str, qty: int) -> str:
@@ -247,6 +292,18 @@ def get_nifty_option_positions() -> list[dict]:
             merged[sec_id] = {"symbol": sym, "security_id": sec_id,
                                "net_qty": net_qty, "avg_price": avg_price,
                                "realized_profit": realized}
+
+    # The 9:15 straddle (straddle_915.py) is MIS too, but must be invisible
+    # here — un-net its order-book qty so its shorts never trip the entry
+    # lock, the short alerts, or rogue policing. Degrades safely: if the
+    # order book is unreachable the raw shorts only block entries / alert.
+    try:
+        for sec_id, s in get_straddle_summary().items():
+            if s["net_qty"] and sec_id in merged:
+                merged[sec_id]["net_qty"] -= s["net_qty"]
+    except Exception as exc:
+        log.warning("Straddle un-netting skipped: %s", exc)
+
     return list(merged.values())
 
 
@@ -258,7 +315,8 @@ def get_nifty_option_positions() -> list[dict]:
 PENDING_STATUSES = {"TRANSIT", "PENDING", "PART_TRADED"}
 DEAD_STATUSES    = {"REJECTED", "CANCELLED", "EXPIRED"}
 
-CORRELATION_TAG = "DISC"
+CORRELATION_TAG = "DISC"     # discretionary AVWAP trades
+STRADDLE_TAG    = "STR915"   # automated 9:15→10:15 short straddle (straddle_915.py)
 
 
 def get_order_book() -> list[dict]:
@@ -305,6 +363,60 @@ def has_pending_disc_buy() -> bool:
     return False
 
 
+def _order_fill(o: dict) -> tuple[int, float]:
+    """(filled_qty, avg_traded_price) with key-name tolerance."""
+    filled = int(o.get("filledQty") or o.get("filled_qty")
+                 or o.get("tradedQty") or o.get("traded_qty") or 0)
+    status = str(o.get("orderStatus") or o.get("status") or "")
+    if not filled and status == "TRADED":
+        filled = int(o.get("quantity") or 0)
+    price = float(o.get("averageTradedPrice") or o.get("average_traded_price")
+                  or o.get("tradedPrice") or o.get("traded_price") or 0)
+    return filled, price
+
+
+def get_straddle_summary() -> dict[str, dict]:
+    """Per-security fill summary of today's STR915 orders. Empty dict = no straddle today.
+
+    net_qty is the position the straddle's own orders imply (short = negative);
+    pnl (sell_value − buy_value) is only meaningful once net_qty is 0.
+    A key exists as soon as any live STR915 order does, even unfilled — that's
+    the entry script's ran-today guard.
+    """
+    out: dict[str, dict] = {}
+    for o in get_order_book():
+        sec_id, side, status, corr = _order_fields(o)
+        if corr != STRADDLE_TAG or status in DEAD_STATUSES or not sec_id:
+            continue
+        filled, price = _order_fill(o)
+        s = out.setdefault(sec_id, {
+            "symbol": str(o.get("tradingSymbol") or o.get("trading_symbol") or ""),
+            "net_qty": 0, "sell_qty": 0, "sell_value": 0.0,
+            "buy_qty": 0, "buy_value": 0.0,
+        })
+        if side == "SELL":
+            s["net_qty"]    -= filled
+            s["sell_qty"]   += filled
+            s["sell_value"] += filled * price
+        else:
+            s["net_qty"]   += filled
+            s["buy_qty"]   += filled
+            s["buy_value"] += filled * price
+    for s in out.values():
+        s["pnl"] = s["sell_value"] - s["buy_value"]
+    return out
+
+
+def has_pending_straddle_buy(security_id: str) -> bool:
+    """True if a STR915 buy-back order for this security is still working."""
+    for o in get_order_book():
+        sec_id, side, status, corr = _order_fields(o)
+        if (corr == STRADDLE_TAG and sec_id == security_id
+                and side == "BUY" and status in PENDING_STATUSES):
+            return True
+    return False
+
+
 def has_pending_sell(security_id: str) -> bool:
     """True if any MIS sell order for this security is still working.
 
@@ -331,4 +443,16 @@ def get_daily_realized_pnl(positions: list[dict] | None = None) -> float:
     """
     if positions is None:
         positions = get_nifty_option_positions()
-    return sum(p["realized_profit"] for p in positions)
+    total = sum(p["realized_profit"] for p in positions)
+
+    # Keep the AVWAP receipts about AVWAP: back out the closed 9:15 straddle's
+    # realized P&L (it reports its own). Open straddle legs carry no realized
+    # P&L on Dhan's rows, so only closed (net 0) legs are subtracted.
+    try:
+        for s in get_straddle_summary().values():
+            if s["net_qty"] == 0:
+                total -= s["pnl"]
+    except Exception as exc:
+        log.warning("Straddle P&L exclusion skipped: %s", exc)
+
+    return total

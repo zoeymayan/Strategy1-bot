@@ -20,14 +20,14 @@ import hmac
 import logging
 import threading
 import time
-from datetime import date, datetime, time as dtime
-from zoneinfo import ZoneInfo
+from datetime import datetime, time as dtime
 
 from flask import Flask, request, jsonify
 
 import config
 import dhan_client
 import telegram_notify as tg
+from market_calendar import IST, is_trading_day
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,39 +36,6 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 app = Flask(__name__)
-
-IST = ZoneInfo("Asia/Kolkata")
-
-# NSE holidays — update each year
-NSE_HOLIDAYS = {
-    2026: {
-        date(2026, 1, 26),
-        date(2026, 2, 19),
-        date(2026, 3, 20),
-        date(2026, 3, 31),
-        date(2026, 4, 2),
-        date(2026, 4, 3),
-        date(2026, 4, 14),
-        date(2026, 5, 1),
-        date(2026, 6, 27),
-        date(2026, 8, 15),
-        date(2026, 8, 17),
-        date(2026, 9, 16),
-        date(2026, 10, 2),
-        date(2026, 10, 22),
-        date(2026, 11, 11),
-        date(2026, 11, 12),
-        date(2026, 11, 25),
-        date(2026, 12, 25),
-    },
-}
-
-
-def _is_trading_day() -> bool:
-    today = datetime.now(IST).date()
-    if today.weekday() >= 5:
-        return False
-    return today not in NSE_HOLIDAYS.get(today.year, set())
 
 
 def _is_market_hours() -> bool:
@@ -236,7 +203,7 @@ def _polling_loop():
 def _poll_once():
     global _in_position_prev, _pnl_baseline
 
-    if not _is_trading_day() or not _is_market_hours():
+    if not is_trading_day() or not _is_market_hours():
         return
 
     positions = dhan_client.get_nifty_option_positions()
