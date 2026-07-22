@@ -132,11 +132,20 @@ curl -X POST http://<EC2_IP>:5001/webhook \
 
 Check Telegram for: order placed → exit placed → position closed with P&L.
 
-## 10. 9:15 straddle automation (`straddle_915.py`)
+## 10. Automated straddle windows (`straddle_915.py`)
 
-Fully automated: SELL 10-lot ATM weekly straddle at 09:15:05, BUY back at
-10:15:05. MIS market orders tagged `STR915`. Stateless — the order book is
-the only record; both modes are idempotent and safe to re-run.
+Fully automated, MFE/MAE-verified pure time exits (no PT/SL — measured
+inferior; see `Nifty historical data/output/mfe_mae_intraday_straddles.md`):
+
+| Window | Days | Sell | Cover | Tag | Lots env |
+|---|---|---|---|---|---|
+| `915` (default) | every trading day | 09:15:05 | 10:15:05 | `STR915` | `STRADDLE_LOTS` |
+| `1400` | expiry days only | 14:00:05 | 15:00:05 | `STR1400` | `STRADDLE_LOTS_1400` |
+
+Expiry day is detected live: at 14:00 the script asks Dhan for the nearest
+expiry and trades only if it equals today — no calendar to maintain; holiday
+shifts and weekday changes are automatic. MIS market orders; stateless —
+the order book is the only record; all modes idempotent and safe to re-run.
 
 Add to the same crontab as the token refresh (EC2 clock is IST):
 
@@ -144,19 +153,23 @@ Add to the same crontab as the token refresh (EC2 clock is IST):
 15 9  * * 1-5 /home/ubuntu/discretionary/venv/bin/python /home/ubuntu/discretionary/straddle_915.py --enter >> /home/ubuntu/discretionary/straddle.log 2>&1
 15 10 * * 1-5 /home/ubuntu/discretionary/venv/bin/python /home/ubuntu/discretionary/straddle_915.py --exit  >> /home/ubuntu/discretionary/straddle.log 2>&1
 25 10 * * 1-5 /home/ubuntu/discretionary/venv/bin/python /home/ubuntu/discretionary/straddle_915.py --exit  >> /home/ubuntu/discretionary/straddle.log 2>&1
+0 14  * * 1-5 /home/ubuntu/discretionary/venv/bin/python /home/ubuntu/discretionary/straddle_915.py --window 1400 --enter >> /home/ubuntu/discretionary/straddle.log 2>&1
+0 15  * * 1-5 /home/ubuntu/discretionary/venv/bin/python /home/ubuntu/discretionary/straddle_915.py --window 1400 --exit  >> /home/ubuntu/discretionary/straddle.log 2>&1
+5 15  * * 1-5 /home/ubuntu/discretionary/venv/bin/python /home/ubuntu/discretionary/straddle_915.py --window 1400 --exit  >> /home/ubuntu/discretionary/straddle.log 2>&1
 ```
 
-The 10:25 line is a safety re-run: a silent no-op when already flat, a
-second chance if the 10:15 run crashed. Failure ladder if the exit can't
-flatten: Telegram alert at 10:15 → 10:25 cron retry → Dhan's MIS
-square-off (~15:15) as the final backstop.
+The 10:25 / 15:05 lines are safety re-runs: silent no-ops when already
+flat, a second chance if the main exit crashed. Failure ladder if an exit
+can't flatten: Telegram alert → safety cron retry → Dhan's MIS square-off
+(~15:15) as the final backstop (note: only ~10 min of headroom after the
+15:05 retry — treat a 15:00 exit-failure alert as act-now).
 
 Notes:
-- Set `STRADDLE_LOTS` in `.env` (default 10). Cron runs read it fresh —
+- Lots envs in `.env` (default 10 each). Cron runs read them fresh —
   no restart needed.
-- The lock service ignores `STR915` legs entirely (un-netted from its
-  position view) and its P&L receipts exclude the straddle's P&L. The
-  straddle sends its own entry/exit receipts.
+- The lock service ignores all straddle-tagged legs (un-netted from its
+  position view) and its P&L receipts exclude their P&L. Each window
+  sends its own entry/exit receipts.
 - **Do not take discretionary AVWAP trades before ~10:30** — a DISC trade
   on the straddle's strike during 09:15–10:16 would collide in Dhan's MIS
   netting (by agreement, not enforced in code).

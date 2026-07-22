@@ -293,10 +293,11 @@ def get_nifty_option_positions() -> list[dict]:
                                "net_qty": net_qty, "avg_price": avg_price,
                                "realized_profit": realized}
 
-    # The 9:15 straddle (straddle_915.py) is MIS too, but must be invisible
-    # here — un-net its order-book qty so its shorts never trip the entry
-    # lock, the short alerts, or rogue policing. Degrades safely: if the
-    # order book is unreachable the raw shorts only block entries / alert.
+    # The automated straddles (straddle_915.py, all windows) are MIS too,
+    # but must be invisible here — un-net their order-book qty so their
+    # shorts never trip the entry lock, the short alerts, or rogue policing.
+    # Degrades safely: if the order book is unreachable the raw shorts only
+    # block entries / alert.
     try:
         for sec_id, s in get_straddle_summary().items():
             if s["net_qty"] and sec_id in merged:
@@ -315,8 +316,9 @@ def get_nifty_option_positions() -> list[dict]:
 PENDING_STATUSES = {"TRANSIT", "PENDING", "PART_TRADED"}
 DEAD_STATUSES    = {"REJECTED", "CANCELLED", "EXPIRED"}
 
-CORRELATION_TAG = "DISC"     # discretionary AVWAP trades
-STRADDLE_TAG    = "STR915"   # automated 9:15→10:15 short straddle (straddle_915.py)
+CORRELATION_TAG = "DISC"                  # discretionary AVWAP trades
+STRADDLE_TAG    = "STR915"                # 9:15→10:15 daily straddle (straddle_915.py)
+STRADDLE_TAGS   = ("STR915", "STR1400")   # all automated straddle windows
 
 
 def get_order_book() -> list[dict]:
@@ -375,18 +377,22 @@ def _order_fill(o: dict) -> tuple[int, float]:
     return filled, price
 
 
-def get_straddle_summary() -> dict[str, dict]:
-    """Per-security fill summary of today's STR915 orders. Empty dict = no straddle today.
+def get_straddle_summary(tags: str | tuple = STRADDLE_TAGS) -> dict[str, dict]:
+    """Per-security fill summary of today's straddle-tagged orders.
 
-    net_qty is the position the straddle's own orders imply (short = negative);
-    pnl (sell_value − buy_value) is only meaningful once net_qty is 0.
-    A key exists as soon as any live STR915 order does, even unfilled — that's
+    Default aggregates every straddle window (what the lock service needs);
+    pass one tag for a single window (what its entry/exit script needs).
+    net_qty is the position the orders imply (short = negative); pnl
+    (sell_value − buy_value) is only meaningful once net_qty is 0. A key
+    exists as soon as any live tagged order does, even unfilled — that's
     the entry script's ran-today guard.
     """
+    if isinstance(tags, str):
+        tags = (tags,)
     out: dict[str, dict] = {}
     for o in get_order_book():
         sec_id, side, status, corr = _order_fields(o)
-        if corr != STRADDLE_TAG or status in DEAD_STATUSES or not sec_id:
+        if corr not in tags or status in DEAD_STATUSES or not sec_id:
             continue
         filled, price = _order_fill(o)
         s = out.setdefault(sec_id, {
@@ -407,11 +413,11 @@ def get_straddle_summary() -> dict[str, dict]:
     return out
 
 
-def has_pending_straddle_buy(security_id: str) -> bool:
-    """True if a STR915 buy-back order for this security is still working."""
+def has_pending_straddle_buy(security_id: str, tag: str = STRADDLE_TAG) -> bool:
+    """True if a buy-back order with this straddle tag is still working."""
     for o in get_order_book():
         sec_id, side, status, corr = _order_fields(o)
-        if (corr == STRADDLE_TAG and sec_id == security_id
+        if (corr == tag and sec_id == security_id
                 and side == "BUY" and status in PENDING_STATUSES):
             return True
     return False
@@ -445,9 +451,10 @@ def get_daily_realized_pnl(positions: list[dict] | None = None) -> float:
         positions = get_nifty_option_positions()
     total = sum(p["realized_profit"] for p in positions)
 
-    # Keep the AVWAP receipts about AVWAP: back out the closed 9:15 straddle's
-    # realized P&L (it reports its own). Open straddle legs carry no realized
-    # P&L on Dhan's rows, so only closed (net 0) legs are subtracted.
+    # Keep the AVWAP receipts about AVWAP: back out the closed automated
+    # straddles' realized P&L (they report their own). Open straddle legs
+    # carry no realized P&L on Dhan's rows, so only closed (net 0) legs
+    # are subtracted.
     try:
         for s in get_straddle_summary().values():
             if s["net_qty"] == 0:

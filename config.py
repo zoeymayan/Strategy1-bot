@@ -13,7 +13,8 @@ TELEGRAM_CHAT_ID    = os.getenv("TELEGRAM_CHAT_ID", "")
 
 WEBHOOK_SECRET      = os.getenv("WEBHOOK_SECRET", "")
 TRADE_QTY           = int(os.getenv("TRADE_QTY", "1"))   # lots; 1 lot = 65 qty
-STRADDLE_LOTS       = int(os.getenv("STRADDLE_LOTS", "10"))  # 9:15 straddle size (lots per leg)
+STRADDLE_LOTS       = int(os.getenv("STRADDLE_LOTS", "10"))       # 9:15 straddle size (lots per leg)
+STRADDLE_LOTS_1400  = int(os.getenv("STRADDLE_LOTS_1400", "10"))  # 2pm expiry straddle size (lots per leg)
 POLL_INTERVAL       = int(os.getenv("POLL_INTERVAL", "30"))
 ENTRY_COOLDOWN      = int(os.getenv("ENTRY_COOLDOWN", "60"))  # secs; bridges order → positions visibility
 FLASK_PORT          = int(os.getenv("FLASK_PORT", "5001"))
